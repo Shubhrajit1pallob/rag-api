@@ -1,12 +1,7 @@
-import os
 from dataclasses import dataclass
 from typing import Any, Protocol
 
-import voyageai
-
 from app.pipeline.chunker import Chunk
-
-DEFAULT_EMBEDDING_MODEL = os.environ.get("VOYAGE_EMBEDDING_MODEL", "voyage-3")
 
 
 class EmbeddingClient(Protocol):
@@ -31,23 +26,20 @@ class EmbeddedChunk:
 def embed_chunks(
     chunks: list[Chunk],
     *,
-    model: str = DEFAULT_EMBEDDING_MODEL,
+    model: str,
+    client: EmbeddingClient,
     input_type: str = "document",
-    client: EmbeddingClient | None = None,
 ) -> list[EmbeddedChunk]:
     """Embed each chunk's text via Voyage AI.
 
     input_type must be "document" when embedding content for storage and "query"
     when embedding a user's question at retrieval time -- Voyage's model treats
     the two asymmetrically, so mixing them up degrades retrieval quality. client
-    defaults to a real voyageai.Client() but can be swapped for a fake in tests
-    so embedding tests don't need a real API key or network access.
+    is required so callers (and tests) choose it explicitly -- there is no hidden
+    fallback to a real voyageai.Client().
     """
     if not chunks:
         return []
-
-    if client is None:
-        client = voyageai.Client()
 
     texts = [chunk.text for chunk in chunks]
     result = client.embed(texts, model=model, input_type=input_type)
@@ -56,3 +48,14 @@ def embed_chunks(
         EmbeddedChunk(chunk=chunk, embedding=embedding)
         for chunk, embedding in zip(chunks, result.embeddings)
     ]
+
+
+def embed_query(
+    text: str,
+    *,
+    model: str,
+    client: EmbeddingClient,
+) -> list[float]:
+    """Embed a user's question with input_type="query" for retrieval."""
+    result = client.embed([text], model=model, input_type="query")
+    return result.embeddings[0]

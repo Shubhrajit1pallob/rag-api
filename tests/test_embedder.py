@@ -1,5 +1,5 @@
 from app.pipeline.chunker import Chunk
-from app.pipeline.embedder import DEFAULT_EMBEDDING_MODEL, EmbeddedChunk, embed_chunks
+from app.pipeline.embedder import EmbeddedChunk, embed_chunks, embed_query
 
 
 class _FakeEmbeddingsResult:
@@ -21,7 +21,7 @@ class _FakeClient:
 
 def test_empty_chunks_returns_empty_list_without_calling_client():
     client = _FakeClient(embeddings=[])
-    assert embed_chunks([], client=client) == []
+    assert embed_chunks([], model="m", client=client) == []
     assert client.calls == []
 
 
@@ -32,7 +32,7 @@ def test_embeds_each_chunk_and_pairs_with_its_vector():
     ]
     client = _FakeClient(embeddings=[[0.1, 0.2], [0.3, 0.4]])
 
-    result = embed_chunks(chunks, client=client)
+    result = embed_chunks(chunks, model="m", client=client)
 
     assert result == [
         EmbeddedChunk(chunk=chunks[0], embedding=[0.1, 0.2]),
@@ -44,7 +44,7 @@ def test_sends_chunk_text_to_the_client():
     chunks = [Chunk(text="hello world", title="A", level=1)]
     client = _FakeClient(embeddings=[[0.0]])
 
-    embed_chunks(chunks, client=client)
+    embed_chunks(chunks, model="m", client=client)
 
     assert client.calls[0]["texts"] == ["hello world"]
 
@@ -53,7 +53,7 @@ def test_default_input_type_is_document():
     chunks = [Chunk(text="hello", title="A", level=1)]
     client = _FakeClient(embeddings=[[0.0]])
 
-    embed_chunks(chunks, client=client)
+    embed_chunks(chunks, model="m", client=client)
 
     assert client.calls[0]["input_type"] == "document"
 
@@ -62,24 +62,26 @@ def test_input_type_can_be_overridden_for_query_embedding():
     chunks = [Chunk(text="hello", title="A", level=1)]
     client = _FakeClient(embeddings=[[0.0]])
 
-    embed_chunks(chunks, client=client, input_type="query")
+    embed_chunks(chunks, model="m", client=client, input_type="query")
 
     assert client.calls[0]["input_type"] == "query"
-
-
-def test_default_model_is_the_module_default():
-    chunks = [Chunk(text="hello", title="A", level=1)]
-    client = _FakeClient(embeddings=[[0.0]])
-
-    embed_chunks(chunks, client=client)
-
-    assert client.calls[0]["model"] == DEFAULT_EMBEDDING_MODEL
 
 
 def test_model_can_be_overridden():
     chunks = [Chunk(text="hello", title="A", level=1)]
     client = _FakeClient(embeddings=[[0.0]])
 
-    embed_chunks(chunks, client=client, model="voyage-3-lite")
+    embed_chunks(chunks, model="voyage-3-lite", client=client)
 
     assert client.calls[0]["model"] == "voyage-3-lite"
+
+
+def test_embed_query_sends_query_input_type_and_returns_one_vector():
+    client = _FakeClient(embeddings=[[0.5, 0.6]])
+
+    vector = embed_query("what is caching?", model="m", client=client)
+
+    assert vector == [0.5, 0.6]
+    assert client.calls == [
+        {"texts": ["what is caching?"], "model": "m", "input_type": "query"}
+    ]
