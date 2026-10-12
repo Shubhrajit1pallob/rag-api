@@ -15,6 +15,7 @@ def answer_question(
     *,
     embedding_model: str,
     claude_model: str,
+    claude_max_tokens: int,
     default_top_k: int,
     min_similarity: float,
 ) -> QueryResponse:
@@ -35,7 +36,13 @@ def answer_question(
     if not hits:
         return QueryResponse(answer=NO_RESULTS_ANSWER, sources=[])
 
-    answer = generate_answer(request.question, hits, client=claude_client, model=claude_model)
+    answer = generate_answer(
+        request.question,
+        hits,
+        client=claude_client,
+        model=claude_model,
+        max_tokens=claude_max_tokens,
+    )
     sources = [
         Source(
             document_id=hit.document_id,

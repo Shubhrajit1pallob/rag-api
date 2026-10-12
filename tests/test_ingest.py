@@ -40,6 +40,12 @@ def test_normalize_tags_trims_drops_empty_dedupes_keeps_order():
     ]
 
 
+def test_normalize_tags_dedupes_case_insensitively_keeping_first_casing():
+    assert normalize_tags(["Python", "python", "PYTHON", "C++", "c#", "C#"]) == [
+        "Python", "C++", "c#",
+    ]
+
+
 def test_stored_document_carries_all_fields():
     doc = build_stored_document(make_request(tags=(" Python", "")), "h", "voyage-3", 400)
     assert doc.document_id == "doc-1"

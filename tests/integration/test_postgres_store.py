@@ -120,6 +120,40 @@ def test_query_filters(store):
     assert ids(category="project", tags=["C#"]) == {"both"}
 
 
+def test_tag_filter_is_case_insensitive_and_tags_keep_their_casing(store):
+    store.replace_document(doc("py", tags=["Python", "C++"]), chunks(vec(1)))
+    store.replace_document(doc("cs", tags=["C#"]), chunks(vec(1)))
+
+    def ids(*tags):
+        return {h.document_id for h in store.query(vec(1), 10, SearchFilters(tags=list(tags)))}
+
+    assert ids("python") == {"py"}
+    assert ids("PYTHON", "c++") == {"py"}
+    assert ids("c++") == {"py"} and ids("c#") == {"cs"}  # C++ and C# stay distinct
+    assert ids("python", "c#") == set()
+    assert store.get_document("py").tags == ["Python", "C++"]
+
+
+def test_update_metadata_refreshes_tag_keys(store):
+    store.replace_document(doc(tags=["Python"]), chunks(vec(1)))
+    store.update_document_metadata(doc(tags=["Go"]))
+    assert store.query(vec(1), 10, SearchFilters(tags=["python"])) == []
+    assert len(store.query(vec(1), 10, SearchFilters(tags=["GO"]))) == 1
+
+
+def test_query_budget_counts_atomically_and_rejects_at_limit(store):
+    from app.limits.postgres import PostgresQueryBudget
+
+    with store._pool.connection() as conn:
+        conn.execute("delete from query_usage")
+    budget = PostgresQueryBudget(store._pool)
+    assert [budget.try_consume(2) for _ in range(4)] == [True, True, False, False]
+    with store._pool.connection() as conn:
+        assert conn.execute("select count from query_usage").fetchone()[0] == 2  # rejects don't count
+    assert budget.try_consume(3) is True  # raising the limit frees headroom
+    assert budget.try_consume(3) is False
+
+
 def test_wrong_dimension_is_rejected(store):
     with pytest.raises(ValueError):
         store.query([1.0, 2.0], 3, SearchFilters())

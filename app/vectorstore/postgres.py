@@ -6,6 +6,11 @@ from pgvector.psycopg import register_vector
 from app.pipeline.embedder import EmbeddedChunk
 from app.vectorstore.base import RetrievedChunk, SearchFilters, StoredDocument
 
+# tag_keys holds the lowercased tags so tag filters are case-insensitive while
+# `tags` keeps the casing as sent. It is derived in SQL, so it is not part of
+# StoredDocument and can never disagree with `tags`.
+_TAG_KEYS_SQL = "array(select lower(t) from unnest(%s::text[]) as t)"
+
 _DOCUMENT_COLUMNS = (
     "document_id, title, category, status, date, featured, tags, "
     "content_hash, embedding_model, max_chunk_size"
@@ -47,9 +52,6 @@ class PostgresVectorStore:
         self._pool = pool
         self._dimensions = embedding_dimensions
 
-    def close(self) -> None:
-        self._pool.close()
-
     def _check_dimensions(self, embedding: list[float]) -> None:
         if len(embedding) != self._dimensions:
             raise ValueError(
@@ -86,8 +88,8 @@ class PostgresVectorStore:
         with self._pool.connection() as conn:
             conn.execute(
                 f"""
-                insert into documents ({_DOCUMENT_COLUMNS})
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                insert into documents ({_DOCUMENT_COLUMNS}, tag_keys)
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, {_TAG_KEYS_SQL})
                 on conflict (document_id) do update set
                     title = excluded.title,
                     category = excluded.category,
@@ -95,12 +97,13 @@ class PostgresVectorStore:
                     date = excluded.date,
                     featured = excluded.featured,
                     tags = excluded.tags,
+                    tag_keys = excluded.tag_keys,
                     content_hash = excluded.content_hash,
                     embedding_model = excluded.embedding_model,
                     max_chunk_size = excluded.max_chunk_size,
                     updated_at = now()
                 """,
-                _document_params(document),
+                (*_document_params(document), document.tags),
             )
             conn.execute(
                 "delete from document_chunks where document_id = %s",
@@ -129,10 +132,10 @@ class PostgresVectorStore:
     def update_document_metadata(self, document: StoredDocument) -> int:
         with self._pool.connection() as conn:
             conn.execute(
-                """
+                f"""
                 update documents set
                     title = %s, category = %s, status = %s, date = %s,
-                    featured = %s, tags = %s, content_hash = %s,
+                    featured = %s, tags = %s, tag_keys = {_TAG_KEYS_SQL}, content_hash = %s,
                     embedding_model = %s, max_chunk_size = %s, updated_at = now()
                 where document_id = %s
                 """,
@@ -142,6 +145,7 @@ class PostgresVectorStore:
                     document.status,
                     document.date,
                     document.featured,
+                    document.tags,
                     document.tags,
                     document.content_hash,
                     document.embedding_model,
@@ -172,8 +176,8 @@ class PostgresVectorStore:
             conditions.append("d.featured = %s")
             params.append(filters.featured)
         if filters.tags:
-            conditions.append("d.tags @> %s::text[]")
-            params.append(filters.tags)
+            conditions.append("d.tag_keys @> %s::text[]")
+            params.append([tag.lower() for tag in filters.tags])
         where = f"where {' and '.join(conditions)}" if conditions else ""
         params.append(top_k)
 

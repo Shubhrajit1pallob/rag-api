@@ -65,7 +65,8 @@ class FakeVectorStore:
                 continue
             if filters.featured is not None and doc.featured != filters.featured:
                 continue
-            if not set(filters.tags) <= set(doc.tags):
+            # Mirrors tag_keys @> lower(filter tags): case-insensitive containment.
+            if not {t.lower() for t in filters.tags} <= {t.lower() for t in doc.tags}:
                 continue
             for ec in self.chunks[doc_id]:
                 hits.append(
@@ -80,9 +81,29 @@ class FakeVectorStore:
         return sorted(hits, key=lambda h: h.distance)[:top_k]
 
 
+class FakeQueryBudget:
+    """In-memory QueryBudget with the same contract as the SQL upsert."""
+
+    def __init__(self, used: int = 0):
+        self.used = used
+        self.limits_seen: list[int] = []
+
+    def try_consume(self, limit):
+        self.limits_seen.append(limit)
+        if self.used >= limit:
+            return False
+        self.used += 1
+        return True
+
+
 @pytest.fixture
 def store():
     return FakeVectorStore()
+
+
+@pytest.fixture
+def budget():
+    return FakeQueryBudget()
 
 
 @pytest.fixture

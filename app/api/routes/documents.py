@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.api.deps import (
     get_embedding_client,
     get_vector_store,
-    require_api_key,
+    require_admin_key,
 )
 from app.config import Settings, get_settings
 from app.models.document import (
@@ -15,7 +15,7 @@ from app.pipeline.embedder import EmbeddingClient
 from app.pipeline.ingest import EmptyDocumentError, ingest_document
 from app.vectorstore.base import VectorStore
 
-router = APIRouter(dependencies=[Depends(require_api_key)])
+router = APIRouter(dependencies=[Depends(require_admin_key)])
 
 
 @router.post("/documents", response_model=DocumentIngestResponse)

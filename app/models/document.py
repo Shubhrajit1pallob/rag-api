@@ -24,13 +24,13 @@ class DocumentIngestRequest(BaseModel):
 
 
 def normalize_tags(tags: list[str]) -> list[str]:
-    """Trim, drop empties and duplicates; keep first-seen order and original casing."""
-    seen: dict[str, None] = {}
+    """Trim, drop empties and case-insensitive duplicates; keep first-seen order and casing."""
+    seen: dict[str, str] = {}
     for tag in tags:
         stripped = tag.strip()
         if stripped:
-            seen.setdefault(stripped)
-    return list(seen)
+            seen.setdefault(stripped.lower(), stripped)
+    return list(seen.values())
 
 
 class DocumentIngestResponse(BaseModel):

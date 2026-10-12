@@ -40,7 +40,7 @@ def run(store, embedder, claude, request=None, *, min_similarity=0.0, default_to
     return answer_question(
         request or QueryRequest(question="q"),
         store, embedder, claude,
-        embedding_model="voyage-3", claude_model="m",
+        embedding_model="voyage-3", claude_model="m", claude_max_tokens=400,
         default_top_k=default_top_k, min_similarity=min_similarity,
     )
 
@@ -154,3 +154,29 @@ def test_category_and_featured_filters(seeded):
 
 def test_filters_combine_with_tags(seeded):
     assert ids(seeded, category="project", tags=["C#"]) == {"both"}
+
+
+def test_tag_filter_is_case_insensitive_but_tags_keep_their_casing(seeded):
+    assert ids(seeded, tags=["python"]) == {"both"}
+    assert ids(seeded, tags=["PYTHON"]) == {"both"}
+    assert seeded.get_document("both").tags == ["C++", "C#", "Python"]
+
+
+def test_cpp_and_csharp_stay_distinct_case_insensitively(seeded):
+    assert ids(seeded, tags=["c++"]) == {"cpp", "both"}
+    assert ids(seeded, tags=["c#"]) == {"csharp", "both"}
+
+
+def test_max_tokens_reaches_claude(fake_embedder):
+    class Recording(FakeClaude):
+        def _create(self, **kwargs):
+            self.kwargs = kwargs
+            return super()._create(**kwargs)
+
+    claude = Recording()
+    answer_question(
+        QueryRequest(question="q"), StubStore([hit(0.1)]), fake_embedder, claude,
+        embedding_model="voyage-3", claude_model="m", claude_max_tokens=123,
+        default_top_k=5, min_similarity=0.0,
+    )
+    assert claude.kwargs["max_tokens"] == 123
