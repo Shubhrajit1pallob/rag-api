@@ -1,0 +1,21 @@
+# Weekly version-update PRs. Each PR runs the CI workflow, so a bump that breaks
+# the tests or the image build is visible before merging.
+version: 2
+updates:
+  # Keeps the SHA-pinned actions in .github/workflows/ current.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+
+  # Pinned requirements.txt / requirements-dev.txt.
+  - package-ecosystem: pip
+    directory: /
+    schedule:
+      interval: weekly
+
+  # The python:3.12-slim base image in the Dockerfile.
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
