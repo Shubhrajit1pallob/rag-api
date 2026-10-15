@@ -8,7 +8,7 @@ from app.api.deps import (
     require_query_key,
 )
 from app.config import Settings, get_settings
-from app.generation.claude_client import ClaudeClient
+from app.generation.claude_client import ClaudeClient, build_system_prompt
 from app.limits.base import QueryBudget, seconds_until_utc_midnight
 from app.models.query import QueryRequest, QueryResponse
 from app.pipeline.answer import answer_question
@@ -47,6 +47,7 @@ def post_query(
         embedding_model=settings.voyage_embedding_model,
         claude_model=settings.claude_model,
         claude_max_tokens=settings.claude_max_tokens,
+        system_prompt=build_system_prompt(settings.assistant_instructions),
         default_top_k=settings.retrieval_top_k,
         min_similarity=settings.min_similarity,
     )

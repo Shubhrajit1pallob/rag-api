@@ -22,6 +22,9 @@ class Settings(BaseSettings):
     min_similarity: float = 0.0  # 0 means off
     daily_query_limit: int = Field(default=300, ge=1)
     claude_max_tokens: int = 400
+    # Optional persona text appended to the base system prompt (the base rules win).
+    # Capped so a pasted wall of text can't inflate every request.
+    assistant_instructions: str = Field(default="", max_length=2000)
     max_question_chars: int = 500
     upstream_timeout_seconds: float = 20.0
     upstream_max_retries: int = 1

@@ -1,7 +1,8 @@
 -- rag-api schema for Postgres + pgvector (Supabase or self-hosted).
 -- This file always describes the FULL CURRENT schema: use it for a fresh database.
 -- An existing database is upgraded by running the files in db/migrations/ in order
--- (001 = the original schema, 002 = query budget + case-insensitive tags).
+-- (001 = the original schema, 002 = query budget + case-insensitive tags,
+-- 003 = chunker_version column).
 --
 -- The role section at the bottom is COMMENTED OUT on purpose: it needs a real
 -- generated password, and the role is created once, separately. (db/migrations/002
@@ -20,7 +21,8 @@ create table public.documents (
   content_hash    text not null,
   embedding_model text not null,
   max_chunk_size  integer not null,
-  updated_at      timestamptz not null default now()
+  chunker_version integer not null default 1,   -- app.pipeline.chunker.CHUNKER_VERSION at ingest
+  updated_at     timestamptz not null default now()
 );
 
 create table public.document_chunks (

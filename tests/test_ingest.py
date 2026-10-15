@@ -1,6 +1,8 @@
 import pytest
 
 from app.models.document import DocumentIngestRequest, DocumentMetadata, normalize_tags
+from app.pipeline import ingest as ingest_module
+from app.pipeline.chunker import CHUNKER_VERSION
 from app.pipeline.ingest import (
     EmptyDocumentError,
     build_stored_document,
@@ -53,6 +55,7 @@ def test_stored_document_carries_all_fields():
     assert doc.content_hash == "h"
     assert doc.embedding_model == "voyage-3"
     assert doc.max_chunk_size == 400
+    assert doc.chunker_version == CHUNKER_VERSION
 
 
 def test_created_then_unchanged(store, fake_embedder):
@@ -121,3 +124,33 @@ def test_max_chunk_size_change_triggers_reembed(store, fake_embedder):
     assert fake_embedder.calls == calls + 1
     assert result.chunk_count > first.chunk_count
     assert store.get_document("doc-1").max_chunk_size == 10
+
+
+def test_chunker_version_bump_forces_rechunk_and_reembed(store, fake_embedder, monkeypatch):
+    monkeypatch.setattr(ingest_module, "CHUNKER_VERSION", 5)
+    first = ingest(make_request(), store, fake_embedder)
+    assert first.status == "created"
+    assert store.get_document("doc-1").chunker_version == 5
+    calls = fake_embedder.calls
+
+    # Same version, same content: still skipped.
+    assert ingest(make_request(), store, fake_embedder).status == "unchanged"
+    assert fake_embedder.calls == calls
+
+    monkeypatch.setattr(ingest_module, "CHUNKER_VERSION", 6)
+    result = ingest(make_request(), store, fake_embedder)
+    assert result.status == "content_updated"
+    assert fake_embedder.calls == calls + 1
+    assert store.get_document("doc-1").chunker_version == 6
+    assert ingest(make_request(), store, fake_embedder).status == "unchanged"
+
+
+def test_document_stored_by_an_older_chunker_is_rebuilt_even_if_everything_else_matches(
+    store, fake_embedder
+):
+    ingest(make_request(), store, fake_embedder)
+    store.documents["doc-1"].chunker_version = CHUNKER_VERSION - 1  # as migrated rows (v1)
+    calls = fake_embedder.calls
+    assert ingest(make_request(), store, fake_embedder).status == "content_updated"
+    assert fake_embedder.calls == calls + 1
+    assert store.get_document("doc-1").chunker_version == CHUNKER_VERSION

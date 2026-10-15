@@ -13,7 +13,7 @@ _TAG_KEYS_SQL = "array(select lower(t) from unnest(%s::text[]) as t)"
 
 _DOCUMENT_COLUMNS = (
     "document_id, title, category, status, date, featured, tags, "
-    "content_hash, embedding_model, max_chunk_size"
+    "content_hash, embedding_model, max_chunk_size, chunker_version"
 )
 
 
@@ -44,6 +44,7 @@ def _document_params(document: StoredDocument) -> tuple:
         document.content_hash,
         document.embedding_model,
         document.max_chunk_size,
+        document.chunker_version,
     )
 
 
@@ -89,7 +90,7 @@ class PostgresVectorStore:
             conn.execute(
                 f"""
                 insert into documents ({_DOCUMENT_COLUMNS}, tag_keys)
-                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, {_TAG_KEYS_SQL})
+                values (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, {_TAG_KEYS_SQL})
                 on conflict (document_id) do update set
                     title = excluded.title,
                     category = excluded.category,
@@ -101,6 +102,7 @@ class PostgresVectorStore:
                     content_hash = excluded.content_hash,
                     embedding_model = excluded.embedding_model,
                     max_chunk_size = excluded.max_chunk_size,
+                    chunker_version = excluded.chunker_version,
                     updated_at = now()
                 """,
                 (*_document_params(document), document.tags),

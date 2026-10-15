@@ -31,6 +31,7 @@ def doc(doc_id="d1", **overrides) -> StoredDocument:
         document_id=doc_id, title=f"Title {doc_id}", category="project",
         status="published", date="2026-01-01", featured=False, tags=["Python"],
         content_hash="h1", embedding_model="voyage-3", max_chunk_size=400,
+        chunker_version=2,
     )
     fields.update(overrides)
     return StoredDocument(**fields)

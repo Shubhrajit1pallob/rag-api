@@ -16,6 +16,7 @@ def answer_question(
     embedding_model: str,
     claude_model: str,
     claude_max_tokens: int,
+    system_prompt: str,
     default_top_k: int,
     min_similarity: float,
 ) -> QueryResponse:
@@ -42,6 +43,7 @@ def answer_question(
         client=claude_client,
         model=claude_model,
         max_tokens=claude_max_tokens,
+        system_prompt=system_prompt,
     )
     sources = [
         Source(

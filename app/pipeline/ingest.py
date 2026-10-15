@@ -5,7 +5,7 @@ from app.models.document import (
     DocumentIngestResponse,
     normalize_tags,
 )
-from app.pipeline.chunker import chunk_sections
+from app.pipeline.chunker import CHUNKER_VERSION, chunk_sections
 from app.pipeline.cleaner import clean_sections
 from app.pipeline.embedder import EmbeddingClient, embed_chunks
 from app.pipeline.parser import parse_markdown
@@ -38,6 +38,7 @@ def build_stored_document(
         content_hash=content_hash,
         embedding_model=embedding_model,
         max_chunk_size=max_chunk_size,
+        chunker_version=CHUNKER_VERSION,
     )
 
 
@@ -54,13 +55,14 @@ def ingest_document(
     )
     stored = store.get_document(request.document_id)
 
-    # Content, embedding model and chunk size together decide what the chunks
-    # and vectors look like; if all match, only metadata can have changed.
+    # Content, embedding model, chunk size and chunker version together decide what
+    # the chunks and vectors look like; if all match, only metadata can have changed.
     if (
         stored is not None
         and stored.content_hash == document.content_hash
         and stored.embedding_model == document.embedding_model
         and stored.max_chunk_size == document.max_chunk_size
+        and stored.chunker_version == document.chunker_version
     ):
         if stored == document:
             return DocumentIngestResponse(

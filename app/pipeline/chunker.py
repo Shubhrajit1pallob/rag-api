@@ -4,6 +4,13 @@ from app.pipeline.parser import Section
 
 DEFAULT_MAX_CHUNK_SIZE = 400
 
+# Bump whenever a change to chunking alters what is stored for the same content
+# (chunk boundaries, text or titles). Ingest compares it with the stored value and
+# re-chunks documents that were built by an older version.
+#   1: merged chunks were labelled with the first section's title only
+#   2: merged chunks are labelled with every section title, joined by " / "
+CHUNKER_VERSION = 2
+
 
 @dataclass
 class Chunk:
@@ -22,6 +29,15 @@ def _section_text(section: Section) -> str:
     if section.title and section.body:
         return f"{section.title}\n{section.body}"
     return section.title or section.body
+
+
+def _merged_title(sections: list[Section]) -> str:
+    """Label for merged sections: every distinct non-empty title, in order, joined by " / "."""
+    titles: list[str] = []
+    for section in sections:
+        if section.title and section.title not in titles:
+            titles.append(section.title)
+    return " / ".join(titles)
 
 
 def _split_oversized_section(section: Section, max_chunk_size: int) -> list[Chunk]:
@@ -56,7 +72,7 @@ def chunk_sections(
             return
         text = "\n\n".join(_section_text(s) for s in buffer_sections)
         first = buffer_sections[0]
-        chunks.append(Chunk(text=text, title=first.title, level=first.level))
+        chunks.append(Chunk(text=text, title=_merged_title(buffer_sections), level=first.level))
         buffer_sections.clear()
 
     for section in sections:

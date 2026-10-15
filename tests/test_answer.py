@@ -29,7 +29,10 @@ class FakeClaude:
 
     def _create(self, **kwargs):
         self.calls += 1
-        return SimpleNamespace(content=[SimpleNamespace(type="text", text="the answer")])
+        return SimpleNamespace(
+            content=[SimpleNamespace(type="text", text="the answer")],
+            stop_reason="end_turn",
+        )
 
 
 def hit(distance, doc="d1"):
@@ -41,7 +44,7 @@ def run(store, embedder, claude, request=None, *, min_similarity=0.0, default_to
         request or QueryRequest(question="q"),
         store, embedder, claude,
         embedding_model="voyage-3", claude_model="m", claude_max_tokens=400,
-        default_top_k=default_top_k, min_similarity=min_similarity,
+        system_prompt="sys", default_top_k=default_top_k, min_similarity=min_similarity,
     )
 
 
@@ -108,7 +111,7 @@ def test_filters_are_passed_through_normalized(fake_embedder):
 
 def _doc(doc_id, tags, category="project", featured=False):
     return StoredDocument(doc_id, doc_id, category, "published", "2026-01-01", featured,
-                          tags, "h", "m", 400)
+                          tags, "h", "m", 400, 1)
 
 
 def _seed(store, doc, vector):
@@ -177,6 +180,7 @@ def test_max_tokens_reaches_claude(fake_embedder):
     answer_question(
         QueryRequest(question="q"), StubStore([hit(0.1)]), fake_embedder, claude,
         embedding_model="voyage-3", claude_model="m", claude_max_tokens=123,
-        default_top_k=5, min_similarity=0.0,
+        system_prompt="the system prompt", default_top_k=5, min_similarity=0.0,
     )
     assert claude.kwargs["max_tokens"] == 123
+    assert claude.kwargs["system"] == "the system prompt"  # passed through untouched

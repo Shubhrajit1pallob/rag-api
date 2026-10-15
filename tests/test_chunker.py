@@ -19,7 +19,7 @@ def test_adjacent_same_level_sections_merge_when_under_budget():
         Section(level=2, title="B", body="four five six"),
     ]
     assert chunk_sections(sections, max_chunk_size=20) == [
-        Chunk(text="A\none two three\n\nB\nfour five six", title="A", level=2)
+        Chunk(text="A\none two three\n\nB\nfour five six", title="A / B", level=2)
     ]
 
 
@@ -29,7 +29,7 @@ def test_combined_size_exactly_at_budget_still_merges():
         Section(level=2, title="B", body="three four"),
     ]
     assert chunk_sections(sections, max_chunk_size=6) == [
-        Chunk(text="A\none two\n\nB\nthree four", title="A", level=2)
+        Chunk(text="A\none two\n\nB\nthree four", title="A / B", level=2)
     ]
 
 
@@ -51,7 +51,7 @@ def test_merge_stops_once_budget_would_be_exceeded():
         Section(level=2, title="C", body="seven eight nine"),
     ]
     assert chunk_sections(sections, max_chunk_size=8) == [
-        Chunk(text="A\none two three\n\nB\nfour five six", title="A", level=2),
+        Chunk(text="A\none two three\n\nB\nfour five six", title="A / B", level=2),
         Chunk(text="C\nseven eight nine", title="C", level=2),
     ]
 
@@ -87,6 +87,63 @@ def test_oversized_section_flushes_pending_buffer_first():
         Chunk(text="A\none", title="A", level=2),
         Chunk(text="B\nw0 w1 w2", title="B", level=2),
         Chunk(text="B\nw3 w4 w5", title="B", level=2),
+    ]
+
+
+def test_merged_chunk_title_lists_every_section_in_order():
+    sections = [
+        Section(level=2, title="Overview", body="one"),
+        Section(level=2, title="Monitoring", body="two"),
+        Section(level=2, title="Ingress", body="three"),
+    ]
+    [chunk] = chunk_sections(sections, max_chunk_size=50)
+    assert chunk.title == "Overview / Monitoring / Ingress"
+    assert chunk.level == 2
+
+
+def test_merged_chunk_title_drops_duplicates_keeping_first_position():
+    sections = [
+        Section(level=2, title="Setup", body="one"),
+        Section(level=2, title="Usage", body="two"),
+        Section(level=2, title="Setup", body="three"),
+    ]
+    [chunk] = chunk_sections(sections, max_chunk_size=50)
+    assert chunk.title == "Setup / Usage"
+
+
+def test_merged_chunk_title_skips_untitled_sections():
+    sections = [
+        Section(level=2, title="", body="one"),
+        Section(level=2, title="Usage", body="two"),
+        Section(level=2, title="", body="three"),
+        Section(level=2, title="Notes", body="four"),
+    ]
+    [chunk] = chunk_sections(sections, max_chunk_size=50)
+    assert chunk.title == "Usage / Notes"
+
+
+def test_merged_chunk_of_only_untitled_sections_has_an_empty_title():
+    sections = [
+        Section(level=0, title="", body="one"),
+        Section(level=0, title="", body="two"),
+    ]
+    [chunk] = chunk_sections(sections, max_chunk_size=50)
+    assert chunk.title == ""
+
+
+def test_single_section_title_is_unchanged():
+    [chunk] = chunk_sections([Section(level=2, title="Only", body="one")], max_chunk_size=50)
+    assert chunk.title == "Only"
+
+
+def test_oversized_windows_keep_their_own_title_not_a_merged_label():
+    sections = [
+        Section(level=2, title="Small", body="one"),
+        Section(level=2, title="Big", body=" ".join(f"w{i}" for i in range(6))),
+        Section(level=2, title="After", body="two"),
+    ]
+    assert [c.title for c in chunk_sections(sections, max_chunk_size=3)] == [
+        "Small", "Big", "Big", "After",
     ]
 
 

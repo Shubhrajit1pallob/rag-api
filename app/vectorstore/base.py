@@ -16,6 +16,7 @@ class StoredDocument:
     content_hash: str
     embedding_model: str
     max_chunk_size: int
+    chunker_version: int
 
 
 @dataclass
