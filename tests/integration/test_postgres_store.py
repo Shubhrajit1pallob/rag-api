@@ -57,6 +57,7 @@ def store():
         conn.execute("create schema if not exists extensions")
         conn.execute("drop table if exists public.document_chunks")
         conn.execute("drop table if exists public.documents")
+        conn.execute("drop table if exists public.query_usage")
         conn.execute(SCHEMA.read_text())
 
     pool = create_pool(DATABASE_URL, 1, 3)

@@ -44,9 +44,44 @@ jobs:
             requirements.txt
             requirements-dev.txt
       - run: pip install -r requirements-dev.txt
-      # No real keys needed: the unit tests use fakes. The 10 Postgres integration
-      # tests skip themselves because TEST_DATABASE_URL is not set.
+      # No real keys needed: the unit tests use fakes. The Postgres integration
+      # tests skip themselves here (no TEST_DATABASE_URL); the integration job runs them.
       - run: pytest -q
+
+  # Runs the Postgres tests against a throwaway pgvector database. The password is a
+  # dummy: the container exists only for this job and is not reachable from outside.
+  integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    services:
+      postgres:
+        # pgvector/pgvector:pg17, pinned by digest. Update it deliberately (or via Dependabot).
+        image: pgvector/pgvector@sha256:ac08538c6f8b9904c33c8224c5e5706dbe760aca29db1d096972b4052c22a75d
+        env:
+          POSTGRES_PASSWORD: ci-throwaway
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      # search_path includes `extensions`, as the production rag_api role's does.
+      TEST_DATABASE_URL: postgresql://postgres:ci-throwaway@localhost:5432/postgres?options=-csearch_path%3Dpublic,extensions
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7.0.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - run: pip install -r requirements-dev.txt
+      - run: pytest tests/integration -v
 
   audit:
     runs-on: ubuntu-24.04
@@ -66,7 +101,7 @@ jobs:
   # and scan it. Nothing is pushed and no registry login happens.
   build:
     if: github.event_name != 'release'
-    needs: [test, audit]
+    needs: [test, audit, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     steps:
@@ -94,7 +129,7 @@ jobs:
   # to packages. Pre-releases are skipped, so they never become public images.
   publish:
     if: github.event_name == 'release' && !github.event.release.prerelease
-    needs: [test, audit]
+    needs: [test, audit, integration]
     runs-on: ubuntu-24.04
     timeout-minutes: 20
     permissions:
