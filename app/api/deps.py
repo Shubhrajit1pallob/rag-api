@@ -6,6 +6,7 @@ import voyageai
 from fastapi import Depends, Header, HTTPException, status
 from psycopg_pool import ConnectionPool
 
+from app.cache.postgres import PostgresAnswerCache
 from app.config import Settings, get_settings
 from app.generation import claude_client
 from app.limits.postgres import PostgresQueryBudget
@@ -67,6 +68,11 @@ def get_vector_store() -> PostgresVectorStore:
 @lru_cache
 def get_query_budget() -> PostgresQueryBudget:
     return PostgresQueryBudget(get_pool())
+
+
+@lru_cache
+def get_answer_cache() -> PostgresAnswerCache:
+    return PostgresAnswerCache(get_pool())
 
 
 @lru_cache

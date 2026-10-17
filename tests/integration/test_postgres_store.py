@@ -11,11 +11,17 @@ from pathlib import Path
 
 import pytest
 
+from app.cache.postgres import PostgresAnswerCache
+from app.models.query import QueryResponse, Source
 from app.pipeline.chunker import Chunk
 from app.pipeline.embedder import EmbeddedChunk
 from app.vectorstore.base import SearchFilters, StoredDocument
 
 DATABASE_URL = os.environ.get("TEST_DATABASE_URL")
+# CI sets REQUIRE_TEST_DB=1 so a missing database fails the job instead of skipping
+# every test and going green. Local runs leave it unset and skip without a database.
+if os.environ.get("REQUIRE_TEST_DB") == "1" and not DATABASE_URL:
+    raise RuntimeError("REQUIRE_TEST_DB=1 but TEST_DATABASE_URL is not set")
 pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="TEST_DATABASE_URL not set")
 
 SCHEMA = Path(__file__).resolve().parents[2] / "db" / "schema.sql"
@@ -58,6 +64,7 @@ def store():
         conn.execute("drop table if exists public.document_chunks")
         conn.execute("drop table if exists public.documents")
         conn.execute("drop table if exists public.query_usage")
+        conn.execute("drop table if exists public.answer_cache")
         conn.execute(SCHEMA.read_text())
 
     pool = create_pool(DATABASE_URL, 1, 3)
@@ -159,3 +166,84 @@ def test_query_budget_counts_atomically_and_rejects_at_limit(store):
 def test_wrong_dimension_is_rejected(store):
     with pytest.raises(ValueError):
         store.query([1.0, 2.0], 3, SearchFilters())
+
+
+# --- answer cache -------------------------------------------------------------
+
+
+@pytest.fixture
+def cache(store):
+    return PostgresAnswerCache(store._pool)
+
+
+def cached_response(text="an answer") -> QueryResponse:
+    source = Source(document_id="d1", title="T", section_title="S", distance=0.25)
+    return QueryResponse(answer=text, sources=[source])
+
+
+def backdate(store, key, interval="2 days"):
+    with store._pool.connection() as conn:
+        conn.execute(
+            "update answer_cache set created_at = now() - %s::interval where key = %s",
+            (interval, key),
+        )
+
+
+def count_cache_rows(store) -> int:
+    with store._pool.connection() as conn:
+        return conn.execute("select count(*) from answer_cache").fetchone()[0]
+
+
+def test_cache_roundtrip_and_missing_key(cache):
+    assert cache.get("k1", 60) is None
+    cache.put("k1", cached_response(), 60)
+    assert cache.get("k1", 60) == cached_response()
+    assert cache.get("other", 60) is None
+
+
+def test_cache_put_replaces_an_existing_entry(cache):
+    cache.put("k1", cached_response("old"), 60)
+    cache.put("k1", cached_response("new"), 60)
+    assert cache.get("k1", 60).answer == "new"
+
+
+def test_cache_entry_older_than_the_ttl_is_not_served(store, cache):
+    cache.put("k1", cached_response(), 3600)
+    backdate(store, "k1", "2 hours")
+    assert cache.get("k1", 3600) is None  # expired for a 1 hour TTL
+    assert cache.get("k1", 86400) == cached_response()  # still fresh for a 1 day TTL
+
+
+def test_cache_put_prunes_expired_entries(store, cache):
+    cache.put("old", cached_response(), 3600)
+    backdate(store, "old", "2 hours")
+    cache.put("new", cached_response(), 3600)
+    assert count_cache_rows(store) == 1
+    assert cache.get("new", 3600) is not None
+
+
+def test_replacing_a_document_empties_the_cache(store, cache):
+    cache.put("k1", cached_response(), 60)
+    store.replace_document(doc(), chunks(vec(1)))
+    assert cache.get("k1", 60) is None
+
+
+def test_metadata_update_empties_the_cache(store, cache):
+    store.replace_document(doc(), chunks(vec(1)))
+    cache.put("k1", cached_response(), 60)
+    store.update_document_metadata(doc(title="Renamed"))
+    assert cache.get("k1", 60) is None
+
+
+def test_deleting_a_document_empties_the_cache(store, cache):
+    store.replace_document(doc(), chunks(vec(1)))
+    cache.put("k1", cached_response(), 60)
+    assert store.delete_document("d1") == 1
+    assert cache.get("k1", 60) is None
+
+
+def test_deleting_a_missing_document_still_runs_the_statement_trigger(store, cache):
+    # A statement-level trigger fires even when no row matches; clearing is harmless.
+    cache.put("k1", cached_response(), 60)
+    assert store.delete_document("never-existed") is None
+    assert cache.get("k1", 60) is None

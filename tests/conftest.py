@@ -96,6 +96,33 @@ class FakeQueryBudget:
         return True
 
 
+class FakeAnswerCache:
+    """In-memory AnswerCache. Expiry is covered by the Postgres integration tests."""
+
+    def __init__(self):
+        self.entries = {}
+        self.gets = []  # (key, ttl_seconds)
+        self.puts = []  # (key, ttl_seconds)
+        self.fail = False
+
+    def get(self, key, ttl_seconds):
+        self.gets.append((key, ttl_seconds))
+        if self.fail:
+            raise RuntimeError("cache down")
+        return self.entries.get(key)
+
+    def put(self, key, response, ttl_seconds):
+        self.puts.append((key, ttl_seconds))
+        if self.fail:
+            raise RuntimeError("cache down")
+        self.entries[key] = response
+
+
+@pytest.fixture
+def answer_cache():
+    return FakeAnswerCache()
+
+
 @pytest.fixture
 def store():
     return FakeVectorStore()

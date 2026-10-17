@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # Capped so a pasted wall of text can't inflate every request.
     assistant_instructions: str = Field(default="", max_length=2000)
     max_question_chars: int = 500
+    # How long a stored answer may be served; 0 turns the answer cache off.
+    answer_cache_ttl_seconds: int = Field(default=604800, ge=0)
     upstream_timeout_seconds: float = 20.0
     upstream_max_retries: int = 1
 

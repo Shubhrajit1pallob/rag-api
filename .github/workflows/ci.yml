@@ -67,6 +67,8 @@ jobs:
           --health-timeout 5s
           --health-retries 10
     env:
+      # With this set, the tests fail (not skip) if TEST_DATABASE_URL is ever missing.
+      REQUIRE_TEST_DB: "1"
       # search_path includes `extensions`, as the production rag_api role's does.
       TEST_DATABASE_URL: postgresql://postgres:ci-throwaway@localhost:5432/postgres?options=-csearch_path%3Dpublic,extensions
     steps:

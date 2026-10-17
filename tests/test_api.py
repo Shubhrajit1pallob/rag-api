@@ -37,6 +37,7 @@ def make_settings(**overrides) -> Settings:
         daily_query_limit=5,
         claude_max_tokens=77,
         max_question_chars=50,
+        answer_cache_ttl_seconds=0,  # off by default so repeated questions reach the pipeline
     )
     fields.update(overrides)
     return Settings(**fields)
@@ -68,10 +69,11 @@ def settings():
 
 
 @pytest.fixture
-def client(store, fake_embedder, claude, budget, settings):
+def client(store, fake_embedder, claude, budget, settings, answer_cache):
     app.dependency_overrides[get_settings] = lambda: settings
     app.dependency_overrides[deps.get_vector_store] = lambda: store
     app.dependency_overrides[deps.get_query_budget] = lambda: budget
+    app.dependency_overrides[deps.get_answer_cache] = lambda: answer_cache
     app.dependency_overrides[deps.get_embedding_client] = lambda: fake_embedder
     app.dependency_overrides[deps.get_claude_client] = lambda: claude
     yield TestClient(app)
@@ -383,8 +385,11 @@ def test_database_unavailable_for_budget_is_503(client):
     assert_clean_503(client.post("/query", json=QUESTION, headers=QUERY_HEADERS))
 
 
-def test_non_upstream_bugs_are_not_masked_as_503(fake_embedder, claude, budget, settings):
+def test_non_upstream_bugs_are_not_masked_as_503(
+    fake_embedder, claude, budget, settings, answer_cache
+):
     app.dependency_overrides[get_settings] = lambda: settings
+    app.dependency_overrides[deps.get_answer_cache] = lambda: answer_cache
     app.dependency_overrides[deps.get_vector_store] = lambda: RaisingStore(ValueError("bug"))
     app.dependency_overrides[deps.get_query_budget] = lambda: budget
     app.dependency_overrides[deps.get_embedding_client] = lambda: fake_embedder
@@ -394,3 +399,86 @@ def test_non_upstream_bugs_are_not_masked_as_503(fake_embedder, claude, budget, 
         assert quiet.post("/query", json=QUESTION, headers=QUERY_HEADERS).status_code == 500
     finally:
         app.dependency_overrides.clear()
+
+
+# --- answer cache -------------------------------------------------------------
+
+
+@pytest.fixture
+def cached(client, settings):
+    """The client with the answer cache switched on (60 s TTL) and documents ingested."""
+    app.dependency_overrides[get_settings] = lambda: make_settings(answer_cache_ttl_seconds=60)
+    ingest(client)
+    return client
+
+
+def ask(client, **body):
+    return client.post("/query", json={**QUESTION, **body}, headers=QUERY_HEADERS)
+
+
+def test_cache_off_means_no_lookup_no_store_and_no_header(client, claude, answer_cache):
+    ingest(client)
+    first, second = ask(client), ask(client)
+    assert "X-Cache" not in first.headers and "X-Cache" not in second.headers
+    assert claude.calls == 2
+    assert answer_cache.gets == [] and answer_cache.puts == []
+
+
+def test_first_ask_is_a_miss_that_is_stored_and_the_second_is_a_hit(
+    cached, claude, budget, fake_embedder, answer_cache
+):
+    first = ask(cached)
+    assert first.status_code == 200 and first.headers["X-Cache"] == "MISS"
+    assert (claude.calls, budget.used, len(answer_cache.puts)) == (1, 1, 1)
+    embed_calls = fake_embedder.calls
+
+    second = ask(cached)
+    assert second.headers["X-Cache"] == "HIT"
+    assert second.json() == first.json()
+    # A hit costs nothing: no Voyage, no Claude, no budget, no new store.
+    assert (claude.calls, budget.used, len(answer_cache.puts)) == (1, 1, 1)
+    assert fake_embedder.calls == embed_calls
+    assert answer_cache.puts[0][1] == 60  # the configured TTL is what the cache is given
+
+
+def test_equivalent_questions_hit_but_different_ones_miss(cached, claude):
+    ask(cached)
+    assert ask(cached, question="  what   ABOUT caching? ").headers["X-Cache"] == "HIT"
+    assert ask(cached, question="What about speed?").headers["X-Cache"] == "MISS"
+    assert ask(cached, top_k=2).headers["X-Cache"] == "MISS"
+    assert ask(cached, filters={"category": "project"}).headers["X-Cache"] == "MISS"
+    assert claude.calls == 4
+
+
+def test_a_hit_is_served_even_after_the_daily_budget_is_used_up(cached, budget):
+    ask(cached)
+    budget.used = 5  # the limit in these settings
+    assert ask(cached).status_code == 200
+    over = ask(cached, question="a brand new question")
+    assert over.status_code == 429 and "X-Cache" not in over.headers
+
+
+def test_changing_the_persona_does_not_serve_the_old_answer(cached, claude):
+    ask(cached)
+    app.dependency_overrides[get_settings] = lambda: make_settings(
+        answer_cache_ttl_seconds=60, assistant_instructions="Speak like a pirate."
+    )
+    assert ask(cached).headers["X-Cache"] == "MISS"
+    assert claude.calls == 2
+
+
+def test_nothing_is_cached_for_rejected_requests(cached, answer_cache):
+    too_long = ask(cached, question="x" * 51)  # max_question_chars is 50 in these settings
+    assert too_long.status_code == 422 and "X-Cache" not in too_long.headers
+    assert answer_cache.gets == [] and answer_cache.puts == []
+
+
+def test_cache_lookup_and_store_failures_fail_open(cached, claude, answer_cache, caplog):
+    answer_cache.fail = True
+    with caplog.at_level(logging.WARNING, logger="rag_api"):
+        resp = ask(cached)
+    assert resp.status_code == 200 and resp.json()["answer"] == "fake answer"
+    assert resp.headers["X-Cache"] == "MISS"
+    assert claude.calls == 1
+    assert "Answer cache lookup failed" in caplog.text
+    assert "Answer cache store failed" in caplog.text
