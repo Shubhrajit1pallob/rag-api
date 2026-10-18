@@ -7,3 +7,4 @@ anthropic==1.11.0
 psycopg[binary]==3.2.10
 psycopg-pool==3.3.3
 pgvector==0.5.1
+prometheus_client==0.26.0

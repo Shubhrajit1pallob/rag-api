@@ -2,7 +2,8 @@
 -- This file always describes the FULL CURRENT schema: use it for a fresh database.
 -- An existing database is upgraded by running the files in db/migrations/ in order
 -- (001 = the original schema, 002 = query budget + case-insensitive tags,
--- 003 = chunker_version column, 004 = answer cache).
+-- 003 = chunker_version column, 004 = answer cache, 005 = fixed search_path on the
+-- cache-clearing function).
 --
 -- The role section at the bottom is COMMENTED OUT on purpose: it needs a real
 -- generated password, and the role is created once, separately. (db/migrations/002
@@ -51,7 +52,9 @@ create table public.answer_cache (
 -- Any change to documents empties the cache, in the same transaction as the change.
 -- Runs with the caller's privileges, so rag_api needs delete on answer_cache (below).
 create or replace function public.clear_answer_cache() returns trigger
-language plpgsql as $$
+language plpgsql
+set search_path = ''
+as $$
 begin
   delete from public.answer_cache where true;
   return null;

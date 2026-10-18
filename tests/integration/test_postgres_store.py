@@ -247,3 +247,17 @@ def test_deleting_a_missing_document_still_runs_the_statement_trigger(store, cac
     cache.put("k1", cached_response(), 60)
     assert store.delete_document("never-existed") is None
     assert cache.get("k1", 60) is None
+
+
+def test_clear_answer_cache_function_has_a_pinned_search_path(store):
+    # Migration 005 / the Supabase Security Advisor: a function must not resolve names
+    # through a mutable search_path. The body names public.answer_cache in full.
+    with store._pool.connection() as conn:
+        row = conn.execute(
+            "select p.proconfig from pg_proc p join pg_namespace n on n.oid = p.pronamespace"
+            " where n.nspname = 'public' and p.proname = 'clear_answer_cache'"
+        ).fetchone()
+    assert row is not None, "public.clear_answer_cache() does not exist"
+    settings = [item for item in (row[0] or []) if item.startswith("search_path=")]
+    assert len(settings) == 1
+    assert "public" not in settings[0] and "extensions" not in settings[0]  # i.e. empty

@@ -10,6 +10,7 @@ from app.api.deps import (
     get_vector_store,
     require_query_key,
 )
+from app import metrics
 from app.cache.base import AnswerCache
 from app.cache.key import build_cache_key
 from app.config import Settings, get_settings
@@ -31,6 +32,7 @@ def _cache_get(cache: AnswerCache, key: str, ttl: int) -> QueryResponse | None:
     try:
         return cache.get(key, ttl)
     except Exception:
+        metrics.cache_errors.labels("get").inc()
         logger.warning("Answer cache lookup failed; treating as a miss", exc_info=True)
         return None
 
@@ -39,6 +41,7 @@ def _cache_put(cache: AnswerCache, key: str, result: QueryResponse, ttl: int) ->
     try:
         cache.put(key, result, ttl)
     except Exception:
+        metrics.cache_errors.labels("put").inc()
         logger.warning("Answer cache store failed; continuing without it", exc_info=True)
 
 
@@ -76,9 +79,11 @@ def post_query(
         )
         cached = _cache_get(cache, key, ttl)
         if cached is not None:
+            metrics.query_outcomes.labels("cache_hit").inc()
             response.headers["X-Cache"] = "HIT"
             return cached
     if not budget.try_consume(settings.daily_query_limit):
+        metrics.query_outcomes.labels("budget_rejected").inc()
         raise HTTPException(
             429,
             "Daily query limit reached, try again after midnight UTC",
@@ -97,6 +102,9 @@ def post_query(
         min_similarity=settings.min_similarity,
     )
     if key is not None:
+        metrics.query_outcomes.labels("cache_miss").inc()
         _cache_put(cache, key, result, ttl)
         response.headers["X-Cache"] = "MISS"
+    else:
+        metrics.query_outcomes.labels("cache_disabled").inc()
     return result

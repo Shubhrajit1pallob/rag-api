@@ -1,4 +1,7 @@
 import logging
+import socket
+import urllib.error
+import urllib.request
 from types import SimpleNamespace
 
 import anthropic
@@ -8,8 +11,11 @@ import psycopg_pool
 import pytest
 import voyageai.error
 from fastapi.testclient import TestClient
+from prometheus_client import generate_latest
 from pydantic import ValidationError
 
+from app import main as main_module
+from app import metrics
 from app.api import deps
 from app.config import Settings, get_settings
 from app.main import UPSTREAM_UNAVAILABLE, app
@@ -482,3 +488,208 @@ def test_cache_lookup_and_store_failures_fail_open(cached, claude, answer_cache,
     assert claude.calls == 1
     assert "Answer cache lookup failed" in caplog.text
     assert "Answer cache store failed" in caplog.text
+
+
+# --- metrics ------------------------------------------------------------------
+
+
+def sample(name, **labels) -> float:
+    return metrics.REGISTRY.get_sample_value(name, labels) or 0.0
+
+
+def requests_total(method, route, status) -> float:
+    return sample("rag_http_requests_total", method=method, route=route, status=str(status))
+
+
+def outcome(name) -> float:
+    return sample("rag_query_outcomes_total", outcome=name)
+
+
+def exposition() -> str:
+    return generate_latest(metrics.REGISTRY).decode()
+
+
+def test_requests_are_counted_by_route_template_not_raw_path(client):
+    before = requests_total("DELETE", "/documents/{document_id}", 404)
+    client.delete("/documents/some-private-id", headers=ADMIN_HEADERS)
+    assert requests_total("DELETE", "/documents/{document_id}", 404) == before + 1
+    assert "some-private-id" not in exposition()
+
+
+def test_status_codes_and_durations_are_recorded(client):
+    ok = requests_total("GET", "/health", 200)
+    unauthorized = requests_total("POST", "/query", 401)
+    timed = sample("rag_http_request_duration_seconds_count", method="GET", route="/health")
+    client.get("/health")
+    client.post("/query", json=QUESTION, headers={"X-API-Key": "wrong"})
+    assert requests_total("GET", "/health", 200) == ok + 1
+    assert requests_total("POST", "/query", 401) == unauthorized + 1
+    count = sample("rag_http_request_duration_seconds_count", method="GET", route="/health")
+    assert count == timed + 1
+
+
+def test_unknown_paths_share_one_unmatched_label(client):
+    before = requests_total("GET", "unmatched", 404)
+    for path in ("/nope", "/wp-login.php", "/a/b/c"):
+        client.get(path)
+    assert requests_total("GET", "unmatched", 404) == before + 3
+    assert "wp-login" not in exposition()
+
+
+def test_an_unhandled_error_is_counted_as_a_500(client):
+    app.dependency_overrides[deps.get_vector_store] = lambda: RaisingStore(ValueError("bug"))
+    before = requests_total("POST", "/query", 500)
+    quiet = TestClient(app, raise_server_exceptions=False)
+    assert quiet.post("/query", json=QUESTION, headers=QUERY_HEADERS).status_code == 500
+    assert requests_total("POST", "/query", 500) == before + 1
+
+
+def test_the_api_port_does_not_serve_metrics(client):
+    assert client.get("/metrics").status_code == 404
+    assert client.get("/metrics", headers=ADMIN_HEADERS).status_code == 404
+
+
+def test_query_outcome_is_cache_disabled_when_the_cache_is_off(client):
+    ingest(client)
+    before = outcome("cache_disabled")
+    ask(client)
+    assert outcome("cache_disabled") == before + 1
+
+
+def test_query_outcomes_miss_then_hit(cached):
+    miss, hit, disabled = outcome("cache_miss"), outcome("cache_hit"), outcome("cache_disabled")
+    ask(cached)
+    assert (outcome("cache_miss"), outcome("cache_hit")) == (miss + 1, hit)
+    ask(cached)
+    assert (outcome("cache_miss"), outcome("cache_hit")) == (miss + 1, hit + 1)
+    assert outcome("cache_disabled") == disabled
+
+
+def test_query_outcome_budget_rejected_is_not_counted_as_a_miss(cached, budget):
+    budget.used = 5
+    rejected, miss = outcome("budget_rejected"), outcome("cache_miss")
+    assert ask(cached).status_code == 429
+    assert outcome("budget_rejected") == rejected + 1
+    assert outcome("cache_miss") == miss
+
+
+def test_rejected_requests_have_no_query_outcome(client):
+    names = ("cache_hit", "cache_miss", "cache_disabled", "budget_rejected")
+    before = [outcome(n) for n in names]
+    assert ask(client, question="x" * 51).status_code == 422
+    client.post("/query", json=QUESTION, headers={"X-API-Key": "wrong"})
+    assert [outcome(n) for n in names] == before
+
+
+def test_cache_errors_are_counted_by_operation(cached, answer_cache):
+    answer_cache.fail = True
+    gets = sample("rag_cache_errors_total", operation="get")
+    puts = sample("rag_cache_errors_total", operation="put")
+    assert ask(cached).status_code == 200
+    assert sample("rag_cache_errors_total", operation="get") == gets + 1
+    assert sample("rag_cache_errors_total", operation="put") == puts + 1
+
+
+def test_voyage_failures_are_counted_as_voyage(client):
+    app.dependency_overrides[deps.get_embedding_client] = lambda: RaisingEmbedder(
+        voyageai.error.Timeout(SECRET)
+    )
+    before = sample("rag_upstream_errors_total", service="voyage")
+    assert ask(client).status_code == 503
+    assert sample("rag_upstream_errors_total", service="voyage") == before + 1
+
+
+def test_anthropic_failures_are_counted_as_anthropic(client):
+    ingest(client)
+    exc = anthropic.APITimeoutError(request=httpx.Request("POST", "https://api.example"))
+    app.dependency_overrides[deps.get_claude_client] = lambda: RaisingClaude(exc)
+    before = sample("rag_upstream_errors_total", service="anthropic")
+    assert ask(client).status_code == 503
+    assert sample("rag_upstream_errors_total", service="anthropic") == before + 1
+
+
+def test_database_failures_are_counted_as_database(client):
+    app.dependency_overrides[deps.get_vector_store] = lambda: RaisingStore(
+        psycopg.OperationalError(SECRET)
+    )
+    before = sample("rag_upstream_errors_total", service="database")
+    assert ask(client).status_code == 503
+    assert sample("rag_upstream_errors_total", service="database") == before + 1
+
+
+def test_the_exposition_has_zeroed_series_and_no_questions_keys_or_error_text(client):
+    ingest(client)
+    ask(client, question="zebra-secret-question")
+    app.dependency_overrides[deps.get_vector_store] = lambda: RaisingStore(
+        psycopg.OperationalError(SECRET)
+    )
+    ask(client)
+    text = exposition()
+    assert 'rag_query_outcomes_total{outcome="cache_hit"}' in text
+    assert 'rag_cache_errors_total{operation="put"}' in text
+    for forbidden in ("zebra-secret", QUERY_KEY, ADMIN_KEY, "hunter2", "secret-host", "d1"):
+        assert forbidden not in text
+
+
+def free_port() -> int:
+    with socket.socket() as probe:
+        probe.bind(("127.0.0.1", 0))
+        return probe.getsockname()[1]
+
+
+def scrape(port):
+    url = f"http://127.0.0.1:{port}/metrics"
+    with urllib.request.urlopen(url, timeout=5) as resp:
+        return resp.status, resp.headers["Content-Type"], resp.read().decode()
+
+
+def test_metrics_server_serves_the_registry_and_stops():
+    port = free_port()
+    server = metrics.start_metrics_server(port)
+    assert server is not None
+    try:
+        status, content_type, body = scrape(port)
+    finally:
+        metrics.stop_metrics_server(server)
+    assert status == 200 and content_type.startswith("text/plain")
+    assert "rag_http_requests_total" in body and "rag_query_outcomes_total" in body
+    with pytest.raises(urllib.error.URLError):
+        scrape(port)
+
+
+def test_a_port_that_cannot_be_bound_is_logged_not_raised(caplog):
+    port = free_port()
+    first = metrics.start_metrics_server(port)
+    try:
+        with caplog.at_level(logging.ERROR, logger="rag_api"):
+            assert metrics.start_metrics_server(port) is None
+        assert "Metrics server could not start" in caplog.text
+    finally:
+        metrics.stop_metrics_server(first)
+    metrics.stop_metrics_server(None)  # stopping nothing is fine
+
+
+def test_lifespan_serves_metrics_while_the_app_runs_and_stops_after(monkeypatch):
+    port = free_port()
+    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings(metrics_port=port))
+    with TestClient(app):
+        assert scrape(port)[0] == 200
+    with pytest.raises(urllib.error.URLError):
+        scrape(port)
+
+
+def test_lifespan_starts_no_metrics_server_when_the_port_is_zero(monkeypatch):
+    started = []
+    monkeypatch.setattr(main_module, "get_settings", lambda: make_settings())
+    monkeypatch.setattr(metrics, "start_metrics_server", lambda port: started.append(port))
+    with TestClient(app):
+        pass
+    assert started == []
+
+
+def test_metrics_port_defaults_off_and_must_be_a_valid_port():
+    assert make_settings().metrics_port == 0
+    assert make_settings(metrics_port=9090).metrics_port == 9090
+    for bad in (-1, 65536):
+        with pytest.raises(ValidationError):
+            make_settings(metrics_port=bad)

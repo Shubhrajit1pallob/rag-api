@@ -109,6 +109,7 @@ Set as environment variables, or in a `.env` file for local runs (see `.env.exam
 | `ASSISTANT_INSTRUCTIONS` | empty | Optional persona text (max 2000 characters), appended after the built-in rules, which always take priority. Quote it in `.env` if it has line breaks |
 | `MAX_QUESTION_CHARS` | `500` | Longest accepted question |
 | `ANSWER_CACHE_TTL_SECONDS` | `604800` | How long a stored answer is served (7 days); `0` turns the answer cache off. Needs migration `004` |
+| `METRICS_PORT` | `0` | Port of the separate Prometheus metrics server (`/metrics`, no authentication); `0` turns it off. See Metrics |
 | `UPSTREAM_TIMEOUT_SECONDS` | `20` | Timeout for Voyage and Anthropic calls |
 | `UPSTREAM_MAX_RETRIES` | `1` | Retries for those calls |
 
@@ -125,6 +126,9 @@ Set as environment variables, or in a `.env` file for local runs (see `.env.exam
   uses it is deployed, each document is re-chunked and re-embedded once on its next
   ingest. `004_answer_cache.sql` adds the `answer_cache` table and the trigger on
   `documents` that empties it; run it before deploying the release that uses the cache.
+  `005_cache_function_search_path.sql` pins the `search_path` of that trigger function
+  (the Supabase Security Advisor flags it otherwise); it is re-runnable and may run
+  before or after any release.
 
 Row-level security is enabled on every table; the app connects as `rag_api`, which
 has only the grants it needs.
@@ -148,6 +152,39 @@ cp .env.example .env            # fill in real values
   **Use a disposable database:** the tests drop and recreate the rag-api tables in
   `public`. Set `REQUIRE_TEST_DB=1` to make a missing `TEST_DATABASE_URL` an error
   instead of a skip (CI does this).
+
+## Metrics
+
+Prometheus metrics are off by default. Set `METRICS_PORT` (for example `9090`) and the
+app serves `GET /metrics` on that port, from a thread in the same process. The API port
+does not serve `/metrics` (it returns 404). The metrics port has **no authentication**:
+it is meant to be reachable only by Prometheus, so restrict it at the network level (in
+Kubernetes, with a NetworkPolicy that allows only the monitoring namespace to that port).
+If the port cannot be bound, the app logs an error and starts without metrics.
+
+| Metric | Labels | Meaning |
+|---|---|---|
+| `rag_http_requests_total` | `method`, `route`, `status` | Requests handled. `route` is the route template (`/documents/{document_id}`); requests matching no route share `unmatched` |
+| `rag_http_request_duration_seconds` | `method`, `route` | Request duration histogram |
+| `rag_query_outcomes_total` | `outcome` | Final result of `/query` requests that passed validation (below) |
+| `rag_cache_errors_total` | `operation` (`get`, `put`) | Answer cache errors that were swallowed |
+| `rag_upstream_errors_total` | `service` (`voyage`, `anthropic`, `database`, `other`) | Failures turned into a generic 503 |
+
+`outcome` values are mutually exclusive: `cache_hit`; `cache_miss` (looked up, missed,
+then answered); `cache_disabled` (cache off, answered); `budget_rejected` (429). A query
+that fails with a 503 is in none of them; see the 503 count in
+`rag_http_requests_total` and `rag_upstream_errors_total`. The cache hit rate is
+`cache_hit / (cache_hit + cache_miss)`.
+
+Labels never contain questions, document ids, tags, keys or error text. Counters live in
+memory and reset on restart (use `rate()` in queries). The container runs one process,
+so there is no multi-process aggregation; running several workers would need a different
+setup. There is no token-usage or cost metric.
+
+The tests check the metric values and the exposition text, and a local run of the app
+was scraped over HTTP. It has not been scraped by a real Prometheus. The cluster side
+(container and Service port, NetworkPolicy, ServiceMonitor) lives in the deployment
+repository, not here.
 
 ## Docker and releases
 
@@ -183,4 +220,4 @@ credentials.
 
 ## License
 
-See `LICENSE`.
+MIT, see `LICENSE`.
