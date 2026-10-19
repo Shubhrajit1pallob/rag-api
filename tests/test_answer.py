@@ -184,3 +184,20 @@ def test_max_tokens_reaches_claude(fake_embedder):
     )
     assert claude.kwargs["max_tokens"] == 123
     assert claude.kwargs["system"] == "the system prompt"  # passed through untouched
+
+
+def test_fake_store_hits_carry_date_and_status(store):
+    from app.pipeline.chunker import Chunk
+    from app.pipeline.embedder import EmbeddedChunk
+    from app.vectorstore.base import SearchFilters, StoredDocument
+
+    store.replace_document(
+        StoredDocument(
+            document_id="d1", title="T", category="c", status="Building",
+            date="2026.09-2026.10", featured=False, tags=[], content_hash="h",
+            embedding_model="m", max_chunk_size=400, chunker_version=2,
+        ),
+        [EmbeddedChunk(Chunk(text="body", title="S", level=1), [1.0, 2.0])],
+    )
+    [hit] = store.query([1.0, 2.0], top_k=1, filters=SearchFilters())
+    assert (hit.date, hit.status) == ("2026.09-2026.10", "Building")

@@ -76,6 +76,8 @@ class FakeVectorStore:
                         title=doc.title,
                         section_title=ec.chunk.title,
                         distance=_cosine_distance(embedding, ec.embedding),
+                        date=doc.date,
+                        status=doc.status,
                     )
                 )
         return sorted(hits, key=lambda h: h.distance)[:top_k]

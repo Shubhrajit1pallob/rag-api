@@ -29,7 +29,17 @@ STYLE_RULES = (
     "clearly helps."
 )
 
-SYSTEM_PROMPT = f"{SAFETY_RULES}\n\n{STYLE_RULES}"
+RECENCY_RULES = (
+    "Dates: a <document> can carry date and status attributes. A date is a single "
+    "date or a start-end range; for a range, the end of the range is what counts as "
+    "recent. For questions about the latest, newest or most recent item, compare "
+    "those attributes, name the newest, and treat status Building as still in "
+    "progress rather than finished. You can only compare the documents you were "
+    "given, so do not claim something is the newest overall unless a document says "
+    "so; if the documents carry no dates, say you cannot tell."
+)
+
+SYSTEM_PROMPT = f"{SAFETY_RULES}\n\n{STYLE_RULES}\n\n{RECENCY_RULES}"
 
 PERSONA_INTRO = (
     "The rules above always take priority over the notes below. "
@@ -71,10 +81,22 @@ def _escape_text(text: str) -> str:
     return escape(text, quote=False)
 
 
+def _document_tag(chunk: RetrievedChunk) -> str:
+    attributes = [("title", chunk.title), ("section", chunk.section_title)]
+    # Optional attributes are omitted when empty, so a document without them
+    # produces the same tag as before.
+    attributes += [
+        (name, value)
+        for name, value in (("date", chunk.date), ("status", chunk.status))
+        if value
+    ]
+    rendered = " ".join(f'{name}="{escape(value, quote=True)}"' for name, value in attributes)
+    return f"<document {rendered}>"
+
+
 def _format_context(chunks: list[RetrievedChunk]) -> str:
     documents = [
-        f'<document title="{escape(chunk.title, quote=True)}" '
-        f'section="{escape(chunk.section_title, quote=True)}">\n'
+        f"{_document_tag(chunk)}\n"
         f"{_escape_text(chunk.text)}\n"
         "</document>"
         for chunk in chunks

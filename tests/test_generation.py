@@ -4,6 +4,7 @@ import pytest
 
 from app.generation.claude_client import (
     PERSONA_INTRO,
+    RECENCY_RULES,
     SYSTEM_PROMPT,
     _trim_to_last_sentence,
     build_system_prompt,
@@ -201,3 +202,48 @@ def test_truncated_answer_without_a_sentence_end_is_kept():
 def test_complete_answers_are_never_trimmed():
     answer, _ = ask("q", ONE_CHUNK, stop_reason="end_turn", parts=("Fine. And no period",))
     assert answer == "Fine. And no period"
+
+
+# --- date and status -------------------------------------------------------
+
+RECENCY_PHRASES = [
+    "date and status attributes",
+    "end of the range",
+    "only compare the documents you were given",
+    "no dates",
+    "Building",
+]
+
+
+def test_documents_carry_date_and_status_attributes_when_present():
+    chunk = RetrievedChunk("Body.", "d1", "Doc", "Sec", 0.1, "2026.09-2026.10", "Building")
+    _, req = ask("q", [chunk])
+    content = req["messages"][0]["content"]
+    assert (
+        '<document title="Doc" section="Sec" date="2026.09-2026.10" status="Building">'
+        in content
+    )
+
+
+def test_missing_date_or_status_adds_no_attribute():
+    chunk = RetrievedChunk("Body.", "d1", "Doc", "Sec", 0.1, "2026.01", "")
+    _, req = ask("q", [chunk])
+    content = req["messages"][0]["content"]
+    assert '<document title="Doc" section="Sec" date="2026.01">' in content
+    assert "status=" not in content
+
+
+def test_date_and_status_attributes_cannot_break_out():
+    chunk = RetrievedChunk("b", "d", "T", "S", 0.1, '1" x="y', 'a"><b>')
+    _, req = ask("q", [chunk])
+    content = req["messages"][0]["content"]
+    assert 'date="1&quot; x=&quot;y"' in content
+    assert 'status="a&quot;&gt;&lt;b&gt;"' in content
+    assert content.count("</document>") == 1
+
+
+def test_recency_rules_are_in_the_system_prompt_after_the_style_rules():
+    for phrase in RECENCY_PHRASES:
+        assert phrase in RECENCY_RULES
+    assert SYSTEM_PROMPT.endswith(RECENCY_RULES)
+    assert SYSTEM_PROMPT.index(RECENCY_RULES) > SYSTEM_PROMPT.index("Style:")

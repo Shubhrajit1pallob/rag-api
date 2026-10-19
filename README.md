@@ -26,7 +26,8 @@ asking Claude to answer from them only.
    category, featured and tags).
 5. Drop chunks below `MIN_SIMILARITY`. If none remain, return a fixed "no results"
    answer without calling Claude.
-6. Ask Claude, with the chunks wrapped in escaped `<context>` tags, for a short
+6. Ask Claude, with the chunks wrapped in escaped `<context>` tags (each carrying
+   its document's title, section, and, when set, date and status), for a short
    answer. The response contains the answer and its sources. It is stored in the
    cache.
 
