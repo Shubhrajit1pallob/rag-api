@@ -261,3 +261,12 @@ def test_clear_answer_cache_function_has_a_pinned_search_path(store):
     settings = [item for item in (row[0] or []) if item.startswith("search_path=")]
     assert len(settings) == 1
     assert "public" not in settings[0] and "extensions" not in settings[0]  # i.e. empty
+
+
+def test_query_returns_document_date_and_status(store):
+    store.replace_document(
+        doc(date="2026.09-2026.10", status="Building"), chunks(vec(1))
+    )
+    [hit] = store.query(vec(1), top_k=1, filters=SearchFilters())
+    assert hit.date == "2026.09-2026.10"
+    assert hit.status == "Building"

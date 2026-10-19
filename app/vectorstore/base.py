@@ -26,6 +26,8 @@ class RetrievedChunk:
     title: str
     section_title: str
     distance: float
+    date: str = ""
+    status: str = ""
 
 
 @dataclass

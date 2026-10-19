@@ -185,7 +185,8 @@ class PostgresVectorStore:
 
         sql = f"""
             select c.content, d.document_id, d.title, c.section_title,
-                   c.embedding <=> %s::vector as distance
+                   c.embedding <=> %s::vector as distance,
+                   d.date, d.status
             from document_chunks c
             join documents d on d.document_id = c.document_id
             {where}
